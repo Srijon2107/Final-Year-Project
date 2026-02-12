@@ -291,6 +291,25 @@ const NewFIRTab: React.FC<{ onSuccess: () => void }> = ({ onSuccess }) => {
   return (
     <div className="max-w-2xl mx-auto bg-card p-8 rounded-lg border border-border official-card">
       <h2 className="text-2xl font-bold mb-6 text-blue-900">File a New FIR</h2>
+      
+      {/* Legal Warning */}
+      <div className="bg-amber-50 border-l-4 border-amber-500 p-4 mb-6">
+        <div className="flex items-start">
+          <AlertCircle className="w-6 h-6 text-amber-600 mr-3 mt-0.5 flex-shrink-0" />
+          <div>
+            <h3 className="text-sm font-bold text-amber-800 uppercase tracking-wide">
+              Legal Warning
+            </h3>
+            <p className="text-sm text-amber-700 mt-1">
+              Filing a false FIR is a punishable offense under{" "}
+              <strong>Section 217 of the Bharatiya Nyaya Sanhita (BNS), 2023</strong>{" "}
+              (previously Section 182 IPC). Providing false information to a public
+              servant can lead to imprisonment and fines.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {msg && (
         <div
           className={`p-3 rounded mb-4 ${msg.includes("Success") ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}

@@ -13,18 +13,21 @@ fir_bp = Blueprint('fir', __name__)
 @jwt_required()
 def submit_fir():
     user_id = get_jwt_identity()
+    claims = get_jwt()
+    role = claims.get('role', 'citizen')
+    
     data = request.json
     
     original_text = data.get('text')
     language = data.get('language', 'en')
     
     # New Fields
-    incident_date = data.get('incident_date')
-    incident_time = data.get('incident_time')
-    incident_date = data.get('incident_date')
     incident_time = data.get('incident_time')
     location = data.get('location')
     station_id = data.get('station_id')
+    
+    # Handle Date
+    incident_date = data.get('incident_date')
     
     if not original_text:
         return jsonify({'error': 'FIR description is required'}), 400
@@ -39,53 +42,45 @@ def submit_fir():
             print(f"Translation failed: {e}")
             pass
             
-    # Save to DB
+    # Prepare FIR Entry
+    fir_id = str(uuid.uuid4())
+    current_time = datetime.utcnow()
+    
     fir_entry = {
-        '_id': str(uuid.uuid4()),
+        '_id': fir_id,
         'user_id': user_id,
         'original_text': original_text,
         'translated_text': translated_text,
         'language': language,
         'incident_date': incident_date,
         'incident_time': incident_time,
-        'incident_time': incident_time,
         'location': location,
-        'station_id': station_id,
+        'station_id': str(station_id) if station_id else None,
         'status': 'pending',
-        'submission_date': datetime.utcnow()
+        'submission_date': current_time,
+        'last_updated': current_time
     }
     
     db = get_db()
-    if db is None:
-        return jsonify({'error': 'Database error'}), 500
-
-    # Fetch user details to embed in FIR
-    # This ensures the FIR is self-contained and identifiable for the police
-    user = db.users.find_one({'_id': ObjectId(user_id)})
-    if not user:
-        # Fallback or error, but user_id came from JWT so should exist.
-        # Could be a police user filing? Assuming citizen for now.
-        pass
-
-    fir_entry = {
-        '_id': str(uuid.uuid4()),
-        'user_id': user_id,
-        'complainant_name': user.get('full_name', 'Unknown') if user else 'Unknown',
-        'complainant_phone': user.get('phone', 'N/A') if user else 'N/A',
-        'complainant_aadhar': user.get('aadhar', 'N/A') if user else 'N/A',
-        'original_text': original_text,
-        'translated_text': translated_text,
-        'language': language,
-        'incident_date': incident_date,
-        'incident_time': incident_time,
-        'location': location,
-        'station_id': station_id,
-        'status': 'pending',
-        'submission_date': datetime.utcnow()
-    }
     
+    if role == 'police':
+        # Manual Entry by Police
+        fir_entry['complainant_name'] = data.get('complainant_name', 'Unknown')
+        fir_entry['complainant_phone'] = data.get('complainant_phone', 'N/A')
+        fir_entry['complainant_aadhar'] = data.get('complainant_aadhar', 'N/A')
+        fir_entry['complainant_email'] = data.get('complainant_email', 'N/A')
+        fir_entry['source'] = 'police_manual'
+    else:
+        # Citizen Entry - Fetch details
+        user = db.users.find_one({'_id': ObjectId(user_id)})
+        fir_entry['complainant_name'] = user.get('full_name', 'Unknown') if user else 'Unknown'
+        fir_entry['complainant_phone'] = user.get('phone', 'N/A') if user else 'N/A'
+        fir_entry['complainant_aadhar'] = user.get('aadhar', 'N/A') if user else 'N/A'
+        fir_entry['complainant_email'] = user.get('email', 'N/A') if user else 'N/A'
+        fir_entry['source'] = 'citizen_portal'
+
     db.firs.insert_one(fir_entry)
-    return jsonify({'message': 'FIR submitted successfully', 'fir_id': fir_entry['_id']}), 201
+    return jsonify({'message': 'FIR submitted successfully', 'fir_id': fir_id}), 201
 
 @fir_bp.route('/', methods=['GET'])
 @jwt_required()
@@ -168,6 +163,57 @@ def get_pending_firs():
                  fir['submission_date'] = fir['submission_date'].isoformat()
         return jsonify(firs), 200
     return jsonify([]), 500
+
+@fir_bp.route('/<fir_id>', methods=['GET'])
+@jwt_required()
+def get_fir_details(fir_id):
+    # Allow police or the specific user
+    user_id = get_jwt_identity()
+    claims = get_jwt()
+    role = claims.get('role', 'citizen')
+    
+    db = get_db()
+    if db is None:
+        return jsonify({'error': 'Database error'}), 500
+        
+    fir = db.firs.find_one({'_id': fir_id})
+    if not fir:
+        # Check archives
+        fir = db.archives.find_one({'_id': fir_id})
+        
+    if not fir:
+        return jsonify({'error': 'FIR not found'}), 404
+        
+    # access control
+    if role != 'police' and fir['user_id'] != user_id:
+        return jsonify({'error': 'Unauthorized'}), 403
+        
+    fir['_id'] = str(fir['_id'])
+    if 'submission_date' in fir and isinstance(fir['submission_date'], datetime):
+         fir['submission_date'] = fir['submission_date'].isoformat()
+    if 'last_updated' in fir and isinstance(fir['last_updated'], datetime):
+         fir['last_updated'] = fir['last_updated'].isoformat()
+         
+    # Check for missing complainant details and fetch from user if possible
+    if fir.get('source') == 'citizen_portal' and (
+        not fir.get('complainant_email') or fir.get('complainant_email') == 'N/A' or
+        not fir.get('complainant_phone') or fir.get('complainant_phone') == 'N/A'
+    ):
+        try:
+            user_record = db.users.find_one({'_id': ObjectId(fir['user_id'])})
+            if user_record:
+                if not fir.get('complainant_email') or fir['complainant_email'] == 'N/A':
+                    fir['complainant_email'] = user_record.get('email', 'N/A')
+                if not fir.get('complainant_phone') or fir['complainant_phone'] == 'N/A':
+                    fir['complainant_phone'] = user_record.get('phone', 'N/A')
+                if not fir.get('complainant_aadhar') or fir['complainant_aadhar'] == 'N/A':
+                    fir['complainant_aadhar'] = user_record.get('aadhar', 'N/A')
+                if not fir.get('complainant_name') or fir['complainant_name'] == 'Unknown':
+                    fir['complainant_name'] = user_record.get('full_name', 'Unknown')
+        except Exception as e:
+            print(f"Error fetching user details for FIR {fir_id}: {e}")
+
+    return jsonify(fir), 200
 
 @fir_bp.route('/<fir_id>/update', methods=['PUT'])
 @jwt_required()

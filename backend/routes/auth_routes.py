@@ -116,8 +116,8 @@ def register():
         if db.police.find_one({'police_id': police_id}):
             return jsonify({'error': 'Police ID already registered'}), 400
             
-        new_user['police_id'] = police_id
-        new_user['station_id'] = station_id
+        new_user['police_id'] = str(police_id)
+        new_user['station_id'] = str(station_id)
         collection = db.police
     
     new_user['password_hash'] = generate_password_hash(password)

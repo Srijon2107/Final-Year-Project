@@ -91,12 +91,21 @@ class MLService:
                 for i, idx in enumerate(indices[0]):
                     if idx < len(self.bns_df):
                         item = self.bns_df.iloc[idx]
-                        results.append({
-                            'section': item['Section'],
-                            'description': item['Description'],
-                            'distance': float(distances[0][i]),
-                            'rank': i + 1
-                        })
+                        # Convert to dict and handle NaN
+                        item_dict = item.to_dict()
+                        # Clean up NaN values for JSON
+                        clean_dict = {k: (v if pd.notna(v) else None) for k, v in item_dict.items()}
+                        
+                        result = clean_dict
+                        result['distance'] = float(distances[0][i])
+                        result['rank'] = i + 1
+                        # Ensure core fields exist for frontend
+                        if 'section' not in result and 'Section' in result:
+                            result['section'] = result['Section']
+                        if 'description' not in result and 'Description' in result:
+                            result['description'] = result['Description']
+                            
+                        results.append(result)
                 return results
             except Exception as e:
                 print(f"BNS Prediction error: {e}")

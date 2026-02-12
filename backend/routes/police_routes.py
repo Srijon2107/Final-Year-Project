@@ -7,6 +7,15 @@ from bson import ObjectId
 
 police_bp = Blueprint('police', __name__)
 
+@police_bp.route('/')
+def index():
+    # If user is already logged in, redirect to dashboard
+    # (Optional, but good UX)
+    # verify_jwt_in_request(optional=True)
+    # if get_jwt_identity():
+    #     return redirect(url_for('police.dashboard'))
+    return render_template('police/index.html')
+
 @police_bp.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -31,9 +40,16 @@ def signup():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
         full_name = request.form.get('full_name')
         police_id = request.form.get('police_id')
         station_id = request.form.get('station_id')
+        phone = request.form.get('phone')
+        email = request.form.get('email')
+        
+        if password != confirm_password:
+             flash('Passwords do not match', 'error')
+             return redirect(url_for('police.signup'))
         
         db = get_db()
         
@@ -45,12 +61,16 @@ def signup():
              flash('Police ID already registered', 'error')
              return redirect(url_for('police.signup'))
 
+        # Check phone/email if needed, for now just inserting
+        
         new_user = {
             'username': username,
             'full_name': full_name,
             'role': 'police',
-            'police_id': police_id,
-            'station_id': station_id,
+            'police_id': str(police_id),
+            'station_id': str(station_id),
+            'phone': phone,
+            'email': email,
             'password_hash': generate_password_hash(password),
             'created_at': datetime.datetime.utcnow()
         }
@@ -77,11 +97,142 @@ def dashboard():
     if not user:
         return redirect(url_for('police.login'))
         
-    # Fetch Stats (Mock or Real)
+    # Fetch Stats
     # Total Pending FIRs for this station
-    pending_firs_count = db.firs.count_documents({'station_id': user.get('station_id'), 'status': 'Pending'})
+    pending_firs_count = db.firs.count_documents({'station_id': user.get('station_id'), 'status': 'pending'})
     
     # Recent FIRs
-    recent_firs = list(db.firs.find({'station_id': user.get('station_id')}).sort('created_at', -1).limit(5))
+    recent_firs = list(db.firs.find({'station_id': user.get('station_id')}).sort('submission_date', -1).limit(5))
     
-    return render_template('police/dashboard.html', user=user, pending_count=pending_firs_count, firs=recent_firs)
+    # Chart Data: Group by Month (Last 6 Months)
+    pipeline = [
+        {
+            '$match': {
+                'station_id': user.get('station_id'),
+                'submission_date': {'$gte': datetime.datetime.utcnow() - datetime.timedelta(days=180)}
+            }
+        },
+        {
+            '$group': {
+                '_id': {'$month': '$submission_date'},
+                'count': {'$sum': 1}
+            }
+        },
+        {'$sort': {'_id': 1}}
+    ]
+    
+    monthly_stats = list(db.firs.aggregate(pipeline))
+    
+    # Format for Chart.js
+    months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    chart_labels = []
+    chart_data = []
+    
+    # Create a map of existing data
+    stats_map = {item['_id']: item['count'] for item in monthly_stats}
+    
+    # Get last 6 months list
+    today = datetime.datetime.today()
+    for i in range(5, -1, -1):
+        d = today - datetime.timedelta(days=i*30)
+        m_idx = d.month 
+        chart_labels.append(months[m_idx-1])
+        chart_data.append(stats_map.get(m_idx, 0))
+        
+    return render_template('police/dashboard.html', 
+                           user=user, 
+                           pending_count=pending_firs_count, 
+                           firs=recent_firs,
+                           chart_labels=chart_labels,
+                           chart_data=chart_data)
+
+@police_bp.route('/inbox')
+@jwt_required()
+def inbox():
+    current_user_id = get_jwt_identity()
+    db = get_db()
+    user = db.police.find_one({'_id': ObjectId(current_user_id)})
+    
+    if not user:
+        return redirect(url_for('police.login'))
+        
+    # Fetch all FIRs for station, sorted by newest
+    firs = list(db.firs.find({'station_id': user.get('station_id')}).sort('submission_date', -1))
+    
+    return render_template('police/inbox.html', user=user, firs=firs)
+
+@police_bp.route('/archives')
+@jwt_required()
+def archives():
+    current_user_id = get_jwt_identity()
+    db = get_db()
+    user = db.police.find_one({'_id': ObjectId(current_user_id)})
+    
+    if not user:
+        return redirect(url_for('police.login'))
+        
+    # Fetch archived FIRs (Assuming they are in 'archives' collection or 'firs' with specific status)
+    # Based on fir_routes.py, resolved/rejected FIRs might be moved to 'archives' collection.
+    # Let's check 'archives' collection first.
+    archived_firs = list(db.archives.find({'station_id': user.get('station_id')}).sort('submission_date', -1))
+    
+    return render_template('police/archives.html', user=user, firs=archived_firs)
+
+@police_bp.route('/analytics')
+@jwt_required()
+def analytics():
+    current_user_id = get_jwt_identity()
+    db = get_db()
+    user = db.police.find_one({'_id': ObjectId(current_user_id)})
+    
+    if not user:
+        return redirect(url_for('police.login'))
+        
+    # Real Analytics Data
+    total_firs = db.firs.count_documents({'station_id': user.get('station_id')})
+    # Count from archives as well for total history
+    archived_count = db.archives.count_documents({'station_id': user.get('station_id')})
+    
+    resolved_firs = db.archives.count_documents({'station_id': user.get('station_id'), 'status': 'resolved'})
+    pending_firs = db.firs.count_documents({'station_id': user.get('station_id'), 'status': 'pending'})
+    rejected_firs = db.archives.count_documents({'station_id': user.get('station_id'), 'status': 'rejected'}) # Assuming rejected also archived
+    # If rejected are kept in firs, add check there too.
+    rejected_active = db.firs.count_documents({'station_id': user.get('station_id'), 'status': 'rejected'})
+    
+    stats = {
+        'total': total_firs + archived_count,
+        'resolved': resolved_firs,
+        'pending': pending_firs,
+        'rejected': rejected_firs + rejected_active
+    }
+    
+    return render_template('police/analytics.html', user=user, stats=stats)
+
+@police_bp.route('/profile', methods=['GET', 'POST'])
+@jwt_required()
+def profile():
+    current_user_id = get_jwt_identity()
+    db = get_db()
+    user = db.police.find_one({'_id': ObjectId(current_user_id)})
+    
+    if not user:
+        return redirect(url_for('police.login'))
+        
+    if request.method == 'POST':
+        full_name = request.form.get('full_name')
+        phone = request.form.get('phone')
+        email = request.form.get('email')
+        
+        # station_id usually verified/set by admin, but allowing name edit for now
+        
+        update_data = {
+            'full_name': full_name,
+            'phone': phone,
+            'email': email
+        }
+        
+        db.police.update_one({'_id': ObjectId(current_user_id)}, {'$set': update_data})
+        flash('Profile updated successfully', 'success')
+        return redirect(url_for('police.profile'))
+        
+    return render_template('police/profile.html', user=user)

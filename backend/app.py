@@ -1,6 +1,7 @@
 
 from flask import Flask, request, jsonify, redirect, url_for
 from flask_cors import CORS
+from datetime import timedelta
 from dotenv import load_dotenv
 import os
 
@@ -21,6 +22,9 @@ if not os.path.exists('.env'):
 # Load Config
 env = os.environ.get('FLASK_ENV', 'development')
 app.config.from_object(config[env])
+
+# JWT Expire
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)
 
 # Initialize ML Service
 # It will load models on startup
@@ -55,7 +59,7 @@ app.config['JWT_COOKIE_CSRF_PROTECT'] = False # Disable for simplicity in this m
 
 @app.route('/', methods=['GET'])
 def index():
-    return redirect(url_for('police.login'))
+    return redirect(url_for('police.index'))
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
