@@ -4,7 +4,9 @@ from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from db import get_db
 from datetime import datetime
 from deep_translator import GoogleTranslator
+from ml_service import ml_service
 import uuid
+import pandas as pd
 from bson import ObjectId
 
 fir_bp = Blueprint('fir', __name__)
@@ -46,6 +48,14 @@ def submit_fir():
     fir_id = str(uuid.uuid4())
     current_time = datetime.utcnow()
     
+    # ML Prediction for BNS Sections
+    ai_suggestions = []
+    try:
+        if translated_text:
+            ai_suggestions = ml_service.predict_bns(translated_text, k=5)
+    except Exception as e:
+        print(f"ML Prediction failed in fir_routes: {e}")
+
     fir_entry = {
         '_id': fir_id,
         'user_id': user_id,
@@ -58,7 +68,8 @@ def submit_fir():
         'station_id': str(station_id) if station_id else None,
         'status': 'pending',
         'submission_date': current_time,
-        'last_updated': current_time
+        'last_updated': current_time,
+        'ai_suggestions': ai_suggestions
     }
     
     db = get_db()
